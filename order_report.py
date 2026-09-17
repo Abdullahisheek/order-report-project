@@ -1,220 +1,77 @@
-import os
-import pandas as pd
+import logging
 
-INPUT_FILE = "data/orders.csv"
-OUTPUT_FOLDER = "output"
+from src.config import ReportConfig
+from src.data_cleaner import clean_data
+from src.data_loader import load_data
+from src.report_generator import (
+    create_overview,
+    create_returns_by_category,
+    create_sales_report,
+)
+from src.report_writer import save_report
 
-print("Startar orderrapport")
 
-try:
-    data = pd.read_csv(INPUT_FILE)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s: %(message)s",
+)
 
-    required = {
-        "order_id",
-        "order_date",
-        "customer_id",
-        "region",
-        "product_category",
-        "quantity",
-        "unit_price",
-        "discount",
-        "returned",
-    }
+logger = logging.getLogger(__name__)
 
-    if not required.issubset(data.columns):
-        raise Exception("Fel data")
 
-    print("Läste in", len(data), "rader")
+def main() -> None:
+    """Run the order report program."""
+    config = ReportConfig()
 
-    data["region"] = data["region"].fillna("Unknown").astype(str).str.strip().str.title()
-    data["product_category"] = (
-        data["product_category"]
-        .fillna("Unknown")
-        .astype(str)
-        .str.strip()
-        .str.title()
-    )
+    logger.info("Startar orderrapport")
 
-    data["quantity"] = pd.to_numeric(
-        data["quantity"], errors="coerce"
-    ).fillna(1)
+    try:
+        data = load_data(config.input_file)
 
-    data["unit_price"] = pd.to_numeric(
-        data["unit_price"], errors="coerce"
-    )
-    data["unit_price"] = data["unit_price"].fillna(
-        data["unit_price"].median()
-    )
+        logger.info("Läste in %s rader", len(data))
 
-    data["discount"] = pd.to_numeric(
-        data["discount"], errors="coerce"
-    ).fillna(0)
+        data = clean_data(data)
 
-    data["returned"] = (
-        data["returned"]
-        .fillna("false")
-        .astype(str)
-        .str.strip()
-        .str.lower()
-        .isin(["true", "yes", "1", "ja"])
-    )
-
-    data["order_value"] = (
-        data["quantity"] * data["unit_price"]
-    )
-
-    data["discounted_value"] = (
-        data["order_value"] * (1 - data["discount"])
-    )
-
-    total_sales = round(
-        data["discounted_value"].sum(),
-        2,
-    )
-
-    number_of_orders = data["order_id"].nunique()
-    number_of_returns = int(data["returned"].sum())
-
-    overview = pd.DataFrame(
-        {
-            "metric": [
-                "total_sales",
-                "order_count",
-                "return_count",
-            ],
-            "value": [
-                total_sales,
-                number_of_orders,
-                number_of_returns,
-            ],
-        }
-    )
-
-    overview.to_csv(
-        os.path.join(
-            OUTPUT_FOLDER,
-            "overview.csv",
-        ),
-        index=False,
-    )
-
-    print("Sparade overview.csv")
-
-    result1 = (
-        data.groupby(
+        overview = create_overview(data)
+        sales_by_category = create_sales_report(
+            data,
             "product_category",
-            as_index=False,
         )
-        .agg(
-            order_count=("order_id", "nunique"),
-            total_sales=("discounted_value", "sum"),
-            returns=("returned", "sum"),
-        )
-    )
-
-    result1["total_sales"] = (
-        result1["total_sales"].round(2)
-    )
-
-    result1["return_rate"] = (
-        result1["returns"]
-        / result1["order_count"]
-    ).round(3)
-
-    result1 = (
-        result1
-        .sort_values(
-            "total_sales",
-            ascending=False,
-        )
-        .reset_index(drop=True)
-    )
-
-    result1.to_csv(
-        os.path.join(
-            OUTPUT_FOLDER,
-            "sales_by_category.csv",
-        ),
-        index=False,
-    )
-
-    print("Sparade sales_by_category.csv")
-
-    result2 = (
-        data.groupby(
+        sales_by_region = create_sales_report(
+            data,
             "region",
-            as_index=False,
         )
-        .agg(
-            order_count=("order_id", "nunique"),
-            total_sales=("discounted_value", "sum"),
-            returns=("returned", "sum"),
+        returns_by_category = create_returns_by_category(data)
+
+        save_report(
+            overview,
+            config.output_folder,
+            "overview.csv",
         )
-    )
 
-    result2["total_sales"] = (
-        result2["total_sales"].round(2)
-    )
-
-    result2["return_rate"] = (
-        result2["returns"]
-        / result2["order_count"]
-    ).round(3)
-
-    result2 = (
-        result2
-        .sort_values(
-            "total_sales",
-            ascending=False,
+        save_report(
+            sales_by_category,
+            config.output_folder,
+            "sales_by_category.csv",
         )
-        .reset_index(drop=True)
-    )
 
-    result2.to_csv(
-        os.path.join(
-            OUTPUT_FOLDER,
+        save_report(
+            sales_by_region,
+            config.output_folder,
             "sales_by_region.csv",
-        ),
-        index=False,
-    )
-
-    print("Sparade sales_by_region.csv")
-
-    returns_by_category = (
-        data.groupby(
-            "product_category",
-            as_index=False,
         )
-        .agg(
-            order_count=("order_id", "nunique"),
-            returns=("returned", "sum"),
-        )
-    )
 
-    returns_by_category["return_rate"] = (
-        returns_by_category["returns"]
-        / returns_by_category["order_count"]
-    ).round(3)
-
-    returns_by_category = (
-        returns_by_category
-        .sort_values(
-            "return_rate",
-            ascending=False,
-        )
-        .reset_index(drop=True)
-    )
-
-    returns_by_category.to_csv(
-        os.path.join(
-            OUTPUT_FOLDER,
+        save_report(
+            returns_by_category,
+            config.output_folder,
             "returns_by_category.csv",
-        ),
-        index=False,
-    )
+        )
 
-    print("Sparade returns_by_category.csv")
-    print("Klart")
+        logger.info("Klart")
 
-except Exception as error:
-    print("Något gick fel:", error)
+    except (FileNotFoundError, ValueError, OSError) as error:
+        logger.error("Något gick fel: %s", error)
+
+
+if __name__ == "__main__":
+    main()
